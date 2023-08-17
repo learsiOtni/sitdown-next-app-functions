@@ -43,6 +43,32 @@ exports.userInfo = async (req, res) => {
     }
     
 }
+exports.getAllUsers = async (req, res) => {
+
+    try{
+        const results = await db.collection('users').get();
+        let users = [];
+        results.forEach( user => {
+
+            const { name, bio, createdAt, email, imageUrl, position, projects, status } = user.data();
+            users.push({ 
+                userId: user.id,
+                name,
+                bio,
+                createdAt,
+                email,
+                imageUrl,
+                position,
+                projects,
+                status
+            });
+        });
+
+        return res.json(users);
+    } catch(e){
+        res.status(500).json({ error: e.code});
+    }
+};
 
 exports.getUser = async (req,res) => {
     try {
