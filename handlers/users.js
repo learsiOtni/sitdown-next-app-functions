@@ -2,12 +2,20 @@ const { db, admin } = require('../util/admin');
 const firebaseConfig = require('../util/config');
 
 const { initializeApp } = require('firebase/app');
-const { getAuth, signInWithEmailAndPassword } = require('firebase/auth');
+
+const { 
+    getAuth, 
+    signInWithEmailAndPassword, 
+    createUserWithEmailAndPassword, 
+    GoogleAuthProvider, 
+    signInWithPopup 
+} = require('firebase/auth');
 
 const app = initializeApp(firebaseConfig);
 const auth = getAuth(app);
+const googleProvider = new GoogleAuthProvider();
 
-const userCollection ='users';
+const usersCollection ='users';
 
 
 exports.login = async (req, res) => {
@@ -23,66 +31,89 @@ exports.login = async (req, res) => {
         const token = await firebaseUser.user.getIdToken();
         return res.status(200).json({ token });
     } catch(e) {
-        return res.status(403).json({ general: 'Wrong credentials, please try again!'});
+        return res.status(403).json({ error: 'Wrong credentials, please try again!'});
     }
 }
 
-exports.userInfo = async (req, res) => {
-    const user = {
+exports.signup = async (req, res) => {
+    const newUser = {
+        email: req.body['email'],
+        password: req.body['password'],
+        confirmPassword: req.body['confirmPassword'],
         firstname: req.body['firstname'],
-        lastname: req.body['lastname'],
-        areaNumber: req.body['areaNumber'],
-        contactNumber: req.body['contactNumber']
-    };
+        surname: req.body['surname'],
+    }
 
     try {
-        const newDoc = await db.collection(userCollection).add(user);
-        res.status(201).send(`successfuly created a new user: ${newDoc.id}`)
+        // validation code goes here
+
+        const firebaseUser = await createUserWithEmailAndPassword(auth, newUser.email, newUser.password);
+        
+        const userId = firebaseUser.user.uid;
+        const token = await firebaseUser.user.getIdToken();
+
+        const newUserInfo = {
+            firstname: newUser.firstname,
+            surname: newUser.surname,
+            email: newUser.email,
+            createdAt: new Date().toISOString()
+            // add default image?
+        }
+
+        await db.collection(usersCollection).doc(userId).set(newUserInfo);
+        return res.status(201).json({ token })
+
     } catch(e) {
-        res.status(400).send(`unable to create user`);
+
+        if (e.code === 'auth/email-already-in-use') return res.status(400).json({ error: 'Email is already in use!'})
+        return res.status(500).json({ error: e.code})
+    }
+}
+
+exports.googleLogin = async (res, req) => {
+
+    try{
+        const result = await signInWithPopup(auth, googleProvider);
+
+        const credential = GoogleAuthProvider.credentialFromResult(result);
+        const token = credential.accessToken;
+        const user = result.user;
+
+        // to be continued
+
+    } catch(e) {
+        res.status(500).json({ error: e.code})
+    }
+}
+
+exports.getUsers = async (req, res) => {
+
+    try {
+        const docs = await db.collection(usersCollection).get();
+        const users = [];
+
+        docs.forEach( doc => {
+            users.push({
+                ...doc.data(),
+                id: doc.id
+            })
+        })
+
+        res.status(200).json(users)
+    } catch(e) {
+        res.status(500).json({ error: e.code});
     }
     
 }
-exports.getAllUsers = async (req, res) => {
-
-    try{
-        const results = await db.collection('users').get();
-        let users = [];
-        results.forEach( user => {
-
-            const { name, bio, createdAt, email, imageUrl, position, projects, status } = user.data();
-            users.push({ 
-                userId: user.id,
-                name,
-                bio,
-                createdAt,
-                email,
-                imageUrl,
-                position,
-                projects,
-                status
-            });
-        });
-
-        return res.json(users);
-    } catch(e){
-        res.status(500).json({ error: e.code});
-    }
-};
 
 exports.getUser = async (req,res) => {
     try {
-        const data = await db.collection(userCollection).get();
-        const users = [];
-        data.forEach( doc => {
-            users.push({
-                id: doc.id,
-                data: doc.data()
-            });
-        })
+        const doc = await db.collection(usersCollection).doc(req.params.userId).get();
 
-        res.status(200).json(users);
+        // validation, check if user exists
+
+        res.status(200).json({ ...doc.data(), id: doc.id });
     } catch(e) {
-        res.status(500).send(e);
+        res.status(500).json({ error: e.code});
     }
 }
