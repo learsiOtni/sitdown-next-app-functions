@@ -13,6 +13,7 @@ const {
 
 const app = initializeApp(firebaseConfig);
 const auth = getAuth(app);
+
 const googleProvider = new GoogleAuthProvider();
 
 const usersCollection ='users';
