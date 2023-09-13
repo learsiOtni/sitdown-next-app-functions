@@ -1,5 +1,32 @@
 const { db, FieldValue } = require('../util/admin');
-const { tagsCollection, projectsCollection } = require('../util/collections');
+const { tagsCollection, projectsCollection, usersCollection } = require('../util/collections');
+
+exports.structureUpdate = async (update) => {
+    // TODO: if one field is missing, it returns error, FIX IN FUTURE
+    const { id, createdAt, title, body, tags, userId, projectId } = update;
+    
+    const user = await db.collection(usersCollection).doc(userId).get();
+    const project = await db.collection(projectsCollection).doc(projectId).get();
+
+    const { firstname } = user.data();
+    const projectTitle = project.exists ? project.data().title : "Project not Found!";
+
+    return {
+        id,
+        createdAt,
+        title,
+        body,
+        tags,
+        user: {
+            id: userId,
+            firstname
+        },
+        project: {
+            id: project.exists ? projectId : "none",
+            title: projectTitle,
+        }
+    }
+}
 
 exports.handleTag = async (tag, updateId) => {
 
@@ -19,13 +46,28 @@ exports.handleTag = async (tag, updateId) => {
     }
 }
 
-exports.isArraysEqual = (array1, array2) => {
+exports.handleTeamMembers = async (userId, projectId) => {
+    const userRef = db.collection(usersCollection).doc(userId);
+    const user = await userRef.get();
 
-    if (array1.length !== array2.length) return false;
+    if(user.exists) {
+        userRef.update({
+            projects: FieldValue.arrayUnion(projectId)
+        })
+    } else {
+        userRef.set({
+            projects: [projectId]
+        })
+    }
+}
 
-    // Check if each item in array1 appears in array2
-    for (const item of array1) {
-        if (!array2.includes(item)) return false;
+exports.isArraysEqual = (newArray, oldArray) => {
+
+    if (newArray.length !== oldArray.length) return false;
+
+    // Check if each item in newArray appears in oldArray
+    for (const item of newArray) {
+        if (!oldArray.includes(item)) return false;
     }
 
     return true;
@@ -44,3 +86,18 @@ exports.deleteUpdateFromProject = async (updateId, projectId) => {
         updates: FieldValue.arrayRemove(updateId)
     });
 }
+
+// For example params: tagsArray, tagsCollection, updates, updateId
+// go through each tag in tags, go to the document key updates and delete the field containing the updateId
+exports.deleteRecordInAllDocument = (array, collectionName, fieldKey, documentId) => {
+
+    const batch = db.batch();
+    array.forEach( item => {
+        const ref = db.collection(collectionName).doc(item);
+        batch.update( ref, {
+            [fieldKey]: FieldValue.arrayRemove(documentId)
+        })
+    })
+    
+    return batch;
+};

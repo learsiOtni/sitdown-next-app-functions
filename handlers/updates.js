@@ -1,6 +1,6 @@
 const { db, FieldValue } = require('../util/admin');
 const { updatesCollection, usersCollection, projectsCollection, tagsCollection } = require('../util/collections');
-const { handleTag, isArraysEqual, addUpdateToProject, deleteUpdateFromProject } = require('../util/helpers');
+const { handleTag, isArraysEqual, addUpdateToProject, deleteUpdateFromProject, deleteRecordInAllDocument, structureUpdate } = require('../util/helpers');
 
 
 exports.getUpdates = async (req, res) => {
@@ -10,39 +10,16 @@ exports.getUpdates = async (req, res) => {
         const updates = [];
         const structuredUpdates = [];
 
-        docs.forEach( async doc => {
+        docs.forEach( doc => {
             updates.push({
-                id: doc.id,
-                ...doc.data()
+                ...doc.data(),
+                id: doc.id
             })
         })
 
         // fetch user and project info,
         for (const update of updates) {
-            const { id, createdAt, title, body, tags, userId, projectId } = update;
-
-            const user = await db.collection(usersCollection).doc(userId).get();
-            const project = await db.collection(projectsCollection).doc(projectId).get();
-
-            const { firstname } = user.data();
-            const projectTitle = project.data().title;
-
-            // if one field is missing, it returns error, FIX IN FUTURE
-            structuredUpdates.push({
-                id,
-                createdAt,
-                title,
-                body,
-                tags,
-                user: {
-                    id: userId,
-                    firstname
-                },
-                project: {
-                    id: projectId,
-                    title: projectTitle,
-                }
-            })
+            structuredUpdates.push( await structureUpdate(update) )
         }
         
         return res.status(200).json(structuredUpdates);
@@ -57,11 +34,14 @@ exports.getUpdates = async (req, res) => {
 exports.getUpdate = async (req, res) => {
 
     try{
-        const update = await db.collection(updatesCollection).doc(req.params.updateId).get();
-
+        const updateId = req.params.updateId;
+        const update = await db.collection(updatesCollection).doc(updateId).get();
         if(!update.exists) return res.status(404).json({ error: 'Status update not found!'});
 
-        return res.status(200).json({ ...update.data(), id: update.id})
+        // add user and project info
+        const structuredUpdate = await structureUpdate({...update.data(), id: updateId});
+
+        return res.status(200).json(structuredUpdate);
     } catch(e) {
         return res.status(500).json({ error: e.code});
     }
@@ -86,6 +66,11 @@ exports.createUpdate = async (req, res) => {
         })
         // handle project collection
         addUpdateToProject(update.id, newUpdate.projectId);
+
+        //add updates to user
+        await db.collection(usersCollection).doc(req.user.userId).update({
+            updates: FieldValue.arrayUnion(update.id)
+        });
         
         return res.status(200).json({ ...newUpdate, id: update.id });
     } catch(e) {
@@ -126,7 +111,9 @@ exports.updateUpdate = async (req, res) => {
             oldTags.forEach( oldTag => {
                 const oldTagRef = db.collection(tagsCollection).doc(oldTag);
 
-                if (!newTags.includes(oldTag)) oldTagRef.update({ updates: FieldValue.arrayRemove(updateId)});
+                if (!newTags.includes(oldTag)) oldTagRef.update({ 
+                    updates: FieldValue.arrayRemove(updateId)
+                });
                 else unchangedTags.push(oldTag);
             });
 
@@ -138,13 +125,10 @@ exports.updateUpdate = async (req, res) => {
             })
         }
         // ---- End of Handle TAG changes ----
-        console.log('here');
 
         // ---- Handle projectId changes ----
         const projectId = req.body['projectId'];
-        
         const oldProjectId = update.data().projectId;
-        console.log(projectId, oldProjectId)
 
         if(projectId !== oldProjectId) {
             deleteUpdateFromProject(updateId, oldProjectId);
@@ -152,7 +136,6 @@ exports.updateUpdate = async (req, res) => {
         }
 
         return res.status(201).json({ ...newUpdate, id: updateId })
-
     } catch(e){
         return res.status(500).json({ error: e.code})
     }
@@ -161,12 +144,34 @@ exports.updateUpdate = async (req, res) => {
 exports.deleteUpdate = async (req, res) => {
 
     try {
-        // need to check if document is ready to delete
-        await db.collection(updatesCollection).doc(req.params.updateId).delete();
+        const updateId = req.params.updateId;
+        const updateRef = db.collection(updatesCollection).doc(updateId);
+        // get update document
+        const update = await updateRef.get();
+        if (!update.exists) return res.status(404).json({ error: "Document not found!"});
+
+        const { userId, tags, projectId } = update.data();
+        if (req.user.userId !== userId) return res.status(403).json({ error: "Unauthorized Action!"});
+
+        // remove update record in all tags it had
+        const batch = deleteRecordInAllDocument(tags, tagsCollection, updatesCollection, updateId);
+
+        // remove update record in its project document
+        deleteUpdateFromProject(updateId, projectId);
+
+        // remove from authors updates record
+        const userRef = db.collection(usersCollection).doc(userId);
+        batch.update(userRef, {
+            updates: FieldValue.arrayRemove(updateId)
+        });
+
+        // delete actual document
+        batch.delete(updateRef); 
+        await batch.commit();
     
         return res.status(200).json({ message: "Status update successfully deleted!"})
     } catch(e) {
         return res.status(500).send({ error: e.code})
     }
-
 }
+    

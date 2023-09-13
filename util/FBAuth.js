@@ -23,7 +23,7 @@ module.exports = async (req, res, next) => {
 
         req.user = {
             userId,
-            firstname: user.data().firstname
+            ...user.data()
         }
 
         return next();
